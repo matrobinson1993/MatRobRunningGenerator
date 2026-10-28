@@ -1561,7 +1561,7 @@
       const structures = [];
 
       // 4-3-2-1 Cutdown — every block labelled with pace
-      if (race === "half" || race === "marathon" || race === "10k") {
+      if ((race === "half" || race === "marathon" || race === "10k") && longRunKm >= 28) {
         structures.push([
           `The 4-3-2-1 Cutdown Long Run`,
           `1. Warm-up: 5 km @ ${easyPace}/km (easy conversational)`,
@@ -1581,7 +1581,7 @@
       }
 
       // Steady / fast alternating blocks
-      if (race === "half" || race === "marathon") {
+      if ((race === "half" || race === "marathon") && longRunKm >= 19) {
         const sets = race === "marathon" ? (longRunKm >= 28 ? 6 : 5) : 4;
         structures.push([
           `Steady / Fast Alternating Long Run`,
