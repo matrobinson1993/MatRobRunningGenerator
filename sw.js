@@ -1,7 +1,7 @@
 /* MatRob Run — minimal service worker for installability + light offline shell */
 const CACHE = "matrob-run-v1";
 const PRECACHE = [
-  "./running-fitness-app.html",
+  "./index.html",
   "./manifest.webmanifest",
   "./icon-192.png",
   "./icon-512.png",
