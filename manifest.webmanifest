@@ -2,7 +2,7 @@
   "name": "MatRob's Running Program Generator",
   "short_name": "MatRob Run",
   "description": "Training plans, easy pace (MAF), and workout notes for runners.",
-  "start_url": "./running-fitness-app.html",
+  "start_url": "./index.html",
   "scope": "./",
   "display": "standalone",
   "orientation": "portrait-primary",
