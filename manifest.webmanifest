@@ -1,6 +1,6 @@
 {
   "name": "MatRob's Running Program Generator",
-  "short_name": "MatRob Run",
+  "short_name": "MR Running",
   "description": "Training plans, easy pace (MAF), and workout notes for runners.",
   "start_url": "./",
   "scope": "./",
