@@ -6892,11 +6892,16 @@
       // ---- Plan → files, download, UI ----
       const slug = t => t.replace(/[^A-Za-z0-9]+/g, "-").replace(/^-|-$/g, "") || "Run";
       const dayName = d => DAY_SHORT[d.day] || "Day";
-      function one(wk, d) {
-        const r = parseDay(d), t = ascii(d.title, 40) || "Run", dt = d.date ? new Date(d.date) : null, ok = dt && !isNaN(dt), p2 = n => String(n).padStart(2, "0");
-        const nm = `${ok ? p2(dt.getMonth() + 1) + p2(dt.getDate()) : "W" + wk.week} ${dayName(d)} ${t}`;
+      function one(wk, d, plan) {
+        const r = parseDay(d), t = ascii(d.title, 80) || "Run", dt = d.date ? new Date(d.date) : null, ok = dt && !isNaN(dt), p2 = n => String(n).padStart(2, "0");
+        // Name: W<week>-<session in that week> <Day> <Workout>, e.g. "W1-1 Tue Easy Run", so workouts list in plan order.
+        // Weeks are zero-padded for 10+ week plans (W01 … W16) so W10 doesn't sort before W2.
+        const sess = (wk.days || []).filter(x => x.steps && x.steps.length).indexOf(d) + 1 || 1;
+        const pad = plan && (plan.weeks || []).length >= 10;
+        const nm = `W${pad ? p2(wk.week) : wk.week}-${sess} ${dayName(d)} ${t}`;
         const wkTag = `W${p2(wk.week)}_${dayName(d)}_${slug(t)}`;
-        return { r, base: ok ? `${dt.getFullYear()}-${p2(dt.getMonth() + 1)}-${p2(dt.getDate())}_${wkTag}` : wkTag, json: toJson(nm.slice(0, 60), r.steps) };
+        const fit = nm.length <= 60 ? nm : nm.slice(0, 60).replace(/\s+\S*$/, "").replace(/\s*\([^)]*$/, "").trim(); // cut at a word, drop a half-open bracket
+        return { r, base: ok ? `${dt.getFullYear()}-${p2(dt.getMonth() + 1)}-${p2(dt.getDate())}_${wkTag}` : wkTag, json: toJson(fit, r.steps) };
       }
       const blobOf = o => new Blob([o.json], { type: "application/json" });
       // ---- Send to Garmin: same workouts as the .json export, as a list with dates ----
@@ -6904,7 +6909,7 @@
         const out = []; let simp = 0; const p2 = n => String(n).padStart(2, "0");
         for (const wk of plan.weeks || []) for (const d of wk.days || []) {
           if (!d.steps || !d.steps.length) continue;
-          const o = one(wk, d); if (o.r.simplified) simp++;
+          const o = one(wk, d, plan); if (o.r.simplified) simp++;
           const dt = d.date ? new Date(d.date) : null, w = JSON.parse(o.json);
           out.push({ name: w.workoutName, date: dt && !isNaN(dt) ? `${dt.getFullYear()}-${p2(dt.getMonth() + 1)}-${p2(dt.getDate())}` : null, workout: w });
         }
@@ -6924,7 +6929,7 @@
         const files = [], seen = new Set(); let simp = 0;
         for (const wk of plan.weeks || []) for (const d of wk.days || []) {
           if (!d.steps || !d.steps.length) continue;
-          const o = one(wk, d); if (o.r.simplified) simp++;
+          const o = one(wk, d, plan); if (o.r.simplified) simp++;
           let name = o.base + "." + fmt, i = 2;
           while (seen.has(name)) name = `${o.base}_${i++}.${fmt}`;
           seen.add(name); files.push({ name, data: new TextEncoder().encode(o.json) });
@@ -7074,7 +7079,7 @@
           if (k === "day") {
             const wk = plan.weeks.find(w => w.week === +b.dataset.week), d = wk && wk.days.find(x => x.day === +b.dataset.day);
             if (!d) return;
-            const o = one(wk, d); save(o.base + "." + fmt, blobOf(o));
+            const o = one(wk, d, plan); save(o.base + "." + fmt, blobOf(o));
             return toast(done(o.r.simplified));
           }
           const { files, simp } = build(plan, fmt);
@@ -7196,7 +7201,7 @@
 
     // ========== APP VERSION + UPDATE NOTICE ==========
     // Bump this when you ship a new build (also bump CACHE_VERSION in sw.js).
-    const APP_VERSION = "1.7";
+    const APP_VERSION = "1.8";
 
     (function initAppVersion() {
       const badge = document.getElementById("appVersionBadge");
@@ -7742,7 +7747,8 @@
 
     // ----- send -----
     function renderSend() {
-      const footer = `<p class="text-xs text-slate-500 dark:text-slate-400 mt-5">Connected${CONN.name ? " to Garmin as <b>" + esc(CONN.name) + "</b>" : ""} via GitHub <b>${esc(CONN.owner)}</b>. <button type="button" id="gsDisc" class="underline">Disconnect</button></p>`;
+      const footer = `<button type="button" id="gsCleanLink" class="${BTN2}">Clean up Garmin workouts…</button>
+        <p class="text-xs text-slate-500 dark:text-slate-400 mt-5">Connected${CONN.name ? " to Garmin as <b>" + esc(CONN.name) + "</b>" : ""} via GitHub <b>${esc(CONN.owner)}</b>. <button type="button" id="gsDisc" class="underline">Disconnect</button></p>`;
       if (!PENDING) { body(`<p class="text-sm">Open a plan or workout and tap <b>Send to Garmin</b>.</p>` + footer); return wireFooter(); }
       const s = summaryOf(PENDING);
       body(`
@@ -7756,8 +7762,43 @@
       $("gsSend").onclick = () => send(); wireFooter();
     }
     function wireFooter() {
+      const c = $("gsCleanLink"); if (c) c.onclick = renderClean;
       const d = $("gsDisc"); if (!d) return;
       d.onclick = () => { if (!confirm("Disconnect this phone from Garmin sending? Your private GitHub repository stays; you can connect again any time.")) return; store.del(); CONN = null; render(); };
+    }
+
+    // ----- bulk delete (Garmin Connect has no bulk delete for workouts) -----
+    function renderClean() {
+      body(`
+        <p class="text-sm text-slate-600 dark:text-slate-300">Garmin Connect can only delete workouts one at a time. Do it in bulk here instead. Deleting a workout also removes it from your Garmin calendar. Your completed runs and activities are never touched.</p>
+        <button type="button" id="gsCleanSent" class="${BTN}">Remove all workouts sent from MatRob</button>
+        <p class="${HINT}">Every workout this app has sent to Garmin, past and upcoming. Workouts you made yourself stay.</p>
+        <button type="button" id="gsCleanAll" class="w-full mt-5 px-4 py-3 border border-red-600 text-red-700 dark:text-red-300 rounded-xl font-semibold">Remove EVERY workout in my Garmin library</button>
+        <p class="${HINT}">Clears your whole Garmin workouts list, including ones you made yourself or added from other apps. This can't be undone.</p>
+        <button type="button" id="gsCleanBack" class="w-full mt-4 text-sm underline text-slate-500">Back</button>`);
+      $("gsCleanSent").onclick = () => { if (confirm("Remove all workouts MatRob has sent to your Garmin account (past and upcoming)?")) clean("clean_sent"); };
+      $("gsCleanAll").onclick = () => {
+        const t = prompt("This deletes EVERY workout in your Garmin workouts library and calendar, including ones you made yourself. It can't be undone.\n\nType DELETE to confirm.");
+        if (t && t.trim().toUpperCase() === "DELETE") clean("clean_all");
+      };
+      $("gsCleanBack").onclick = renderSend;
+    }
+    async function clean(mode, code, job) {
+      job = job || "clean-" + Date.now();
+      const list = [[mode === "clean_all" ? "Delete every workout in your Garmin library" : "Delete workouts sent from MatRob", "run"]];
+      const show = (extra = "") => body(steps(list) + extra);
+      show();
+      try {
+        const res = await runJob(CONN, { job, mode, ...(code ? { mfa_code: code } : {}) }, st => { list[0][0] = (mode === "clean_all" ? "Deleting your Garmin workouts · " : "Deleting MatRob workouts · ") + st; show(); });
+        list[0][0] = mode === "clean_all" ? "Delete every workout in your Garmin library" : "Delete workouts sent from MatRob";
+        if (res.status === "needs_code") { show(codeBox()); $("gsCodeGo").onclick = () => { const c = $("gsCode").value.replace(/\D/g, ""); if (c.length >= 4) clean(mode, c, job); }; return; }
+        list[0][1] = res.status === "ok" ? "done" : "fail";
+        show(box(res.status === "ok" ? OK : ERR, esc(res.message)) + (res.status === "ok" ? `<p class="text-sm mt-3">Sync your watch in the Garmin Connect app to remove them from the watch too.</p>` : "") + `<button type="button" id="gsDone" class="${BTN}">Done</button>`);
+        $("gsDone").onclick = () => PENDING ? renderSend() : close();
+      } catch (e) {
+        list[0][1] = "fail"; show(box(ERR, esc(e.status === 401 ? "Your GitHub key has expired or was removed. Connect again." : e.message)) + `<button type="button" id="gsDone" class="${BTN}">Back</button>`);
+        $("gsDone").onclick = renderClean;
+      }
     }
 
     async function send(code, job) {
