@@ -1,7 +1,7 @@
 /* MatRob Run — service worker
  * Keep CACHE_VERSION in sync with APP_VERSION in index.html when you ship a new build.
  */
-const CACHE_VERSION = "1.9";
+const CACHE_VERSION = "2.0";
 const CACHE = "matrob-run-v" + CACHE_VERSION;
 
 const PRECACHE = [
