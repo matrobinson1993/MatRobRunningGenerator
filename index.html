@@ -1368,7 +1368,7 @@
           <li>Make or open a plan (or a single workout) and tap <strong>Send to Garmin</strong>.</li>
           <li><strong>First time only:</strong> tap <strong>Create a GitHub key</strong> (a free <a class="text-brand-600 underline" href="https://github.com/signup" target="_blank" rel="noopener">GitHub account</a> is needed), set Expiration to <strong>No expiration</strong>, generate it and paste it in. Then enter your Garmin Connect email and password, plus the code if Garmin sends one. This creates a private helper in your own GitHub account that does the sending.</li>
           <li>Tap <strong>Send</strong>. Each workout is added to Garmin Connect and scheduled on its date. Tick <strong>Replace upcoming workouts I sent before</strong> when you change your plan, so you don't get duplicates.</li>
-          <li>The next 7 days' workouts go straight to your watch, and each morning the next 7 days are sent automatically, so there's no need to tap Send to Device. Just let your watch sync with the <strong>Garmin Connect</strong> app as usual. The full plan is in your Garmin calendar.</li>
+          <li>Choose what to <strong>put on your watch now</strong> (next 7 days, next 2 weeks or the whole plan). Those go straight to your watch, and each morning the next ones are sent automatically, so there's no need to tap Send to Device. Let your watch sync with the <strong>Garmin Connect</strong> app as usual. The full plan is in your Garmin calendar.</li>
         </ol>
         <p class="text-xs text-gray-500 dark:text-gray-400 mt-3">Workouts are named in plan order, e.g. <em>W01-1 Tue Easy Run</em>. To delete many at once (Garmin Connect can't), open Send to Garmin and tap <strong>Clean up Garmin workouts</strong>. Your Garmin login is stored only in your own private GitHub repository. This uses Garmin's unofficial access and isn't endorsed by Garmin.</p>
       </section>
@@ -7201,7 +7201,7 @@
 
     // ========== APP VERSION + UPDATE NOTICE ==========
     // Bump this when you ship a new build (also bump CACHE_VERSION in sw.js).
-    const APP_VERSION = "2.1";
+    const APP_VERSION = "2.2";
 
     (function initAppVersion() {
       const badge = document.getElementById("appVersionBadge");
@@ -7801,7 +7801,15 @@
         ${PENDING.simp ? `<p class="${HINT}">${PENDING.simp} complex session${PENDING.simp === 1 ? " was" : "s were"} simplified to one distance step.</p>` : ""}
         <label class="flex items-start gap-2 mt-4 text-sm"><input type="checkbox" id="gsReplace" class="mt-1" ${PENDING.single ? "" : "checked"}>
           <span>Replace upcoming workouts I sent before<br><span class="${HINT}">Avoids duplicates if you've changed your plan. Workouts you made yourself in Garmin are never touched.</span></span></label>
+        ${PENDING.single ? "" : `<label class="${LABEL}" for="gsWatch">Put on my watch now</label>
+        <select id="gsWatch" class="${INPUT}">
+          <option value="week">Next 7 days</option><option value="fortnight">Next 2 weeks</option><option value="all">Whole plan (newer watches)</option>
+        </select>
+        <p class="${HINT}">The rest go to your watch automatically each morning as their days get closer. Older watches only hold a limited number of workouts.</p>`}
         <button type="button" id="gsSend" class="${BTN}" ${s.count ? "" : "disabled"}>Send ${s.count} workout${s.count === 1 ? "" : "s"} to Garmin</button>` + footer);
+      const wsel = $("gsWatch");
+      if (wsel) { try { wsel.value = localStorage.getItem("matrob-garmin-watch") || "fortnight"; } catch (e) { wsel.value = "fortnight"; }
+        wsel.onchange = () => { try { localStorage.setItem("matrob-garmin-watch", wsel.value); } catch (e) {} }; }
       $("gsSend").onclick = () => send(); wireFooter();
     }
     function wireFooter() {
@@ -7847,6 +7855,7 @@
 
     async function send(code, job) {
       const replace = $("gsReplace") ? $("gsReplace").checked : false;
+      const watch = $("gsWatch") ? $("gsWatch").value : (send.lastWatch || "fortnight"); send.lastWatch = watch;
       const list = [["Upload to your GitHub", job ? "done" : "run"], ["Send to Garmin", job ? "run" : ""]];
       const show = (extra = "") => body(`<p class="text-sm"><b>${esc(PENDING.label)}</b></p>` + steps(list) + extra);
       show();
@@ -7854,7 +7863,8 @@
         if (!job) {
           if (await ensureUpToDate(CONN).catch(() => false)) { list[0][0] = "Upload to your GitHub (sender updated)"; show(); }
           job = "job-" + Date.now();
-          const payload = { plan: PENDING.label, replace, created: new Date().toISOString(), workouts: PENDING.workouts };
+          const payload = { plan: PENDING.label, replace, watch, single: !!PENDING.single, tz: Intl.DateTimeFormat().resolvedOptions().timeZone,
+                            created: new Date().toISOString(), workouts: PENDING.workouts };
           await gh("PUT", `/repos/${CONN.owner}/${CONN.repo}/contents/inbox/${job}.json`, { message: `Send ${PENDING.workouts.length} workouts`, content: b64utf8(JSON.stringify(payload)), branch: CONN.branch });
           list[0][1] = "done"; list[1][1] = "run"; show();
         }
@@ -7876,7 +7886,7 @@
         list[1][1] = "done";
         show(box(OK, `<b>Done!</b> ${esc(res.message)}`) +
           (res.errors && res.errors.length ? box(WARN, res.errors.map(esc).join("<br>")) : "") +
-          `<p class="text-sm mt-3">Open the <b>Garmin Connect</b> app and sync your watch. ${PENDING.single ? "The workout is under Training → Workouts." : (res.pushed ? "The next 7 days' workouts are already on their way to your watch. Every morning, the next 7 days are sent automatically, so your watch stays topped up." : "Your workouts appear in the Garmin calendar and on your watch on their days.")}</p>
+          `<p class="text-sm mt-3">${res.pushed ? "Open the <b>Garmin Connect</b> app so your watch syncs. They'll appear under Training → Workouts on your watch, and in its calendar." : PENDING.single ? "The workout is under Training → Workouts in Garmin Connect." : "Your full plan is in the Garmin calendar. Workouts are sent to your watch automatically each morning as their days get closer."}</p>
            <button type="button" id="gsDone" class="${BTN}">Done</button>`);
         $("gsDone").onclick = close;
       } catch (e) {
