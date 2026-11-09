@@ -1368,7 +1368,7 @@
           <li>Make or open a plan (or a single workout) and tap <strong>Send to Garmin</strong>.</li>
           <li><strong>First time only:</strong> tap <strong>Create a GitHub key</strong> (a free <a class="text-brand-600 underline" href="https://github.com/signup" target="_blank" rel="noopener">GitHub account</a> is needed), set Expiration to <strong>No expiration</strong>, generate it and paste it in. Then enter your Garmin Connect email and password, plus the code if Garmin sends one. This creates a private helper in your own GitHub account that does the sending.</li>
           <li>Tap <strong>Send</strong>. Each workout is added to Garmin Connect and scheduled on its date. Tick <strong>Replace upcoming workouts I sent before</strong> when you change your plan, so you don't get duplicates.</li>
-          <li>Open the <strong>Garmin Connect</strong> app and sync your watch. Your workouts appear in your calendar and under <strong>Training &amp; Planning → Workouts</strong>.</li>
+          <li>The next 7 days' workouts go straight to your watch, and each morning the next 7 days are sent automatically, so there's no need to tap Send to Device. Just let your watch sync with the <strong>Garmin Connect</strong> app as usual. The full plan is in your Garmin calendar.</li>
         </ol>
         <p class="text-xs text-gray-500 dark:text-gray-400 mt-3">Workouts are named in plan order, e.g. <em>W01-1 Tue Easy Run</em>. To delete many at once (Garmin Connect can't), open Send to Garmin and tap <strong>Clean up Garmin workouts</strong>. Your Garmin login is stored only in your own private GitHub repository. This uses Garmin's unofficial access and isn't endorsed by Garmin.</p>
       </section>
@@ -7201,7 +7201,7 @@
 
     // ========== APP VERSION + UPDATE NOTICE ==========
     // Bump this when you ship a new build (also bump CACHE_VERSION in sw.js).
-    const APP_VERSION = "2.0";
+    const APP_VERSION = "2.1";
 
     (function initAppVersion() {
       const badge = document.getElementById("appVersionBadge");
@@ -7600,6 +7600,18 @@
       let sha; try { sha = (await gh("GET", `/repos/${conn.owner}/${conn.repo}/contents/${path}?ref=${conn.branch}`, null, conn.token)).data.sha; } catch (e) { if (e.status !== 404) throw e; }
       await gh("PUT", `/repos/${conn.owner}/${conn.repo}/contents/${path}`, { message, content: b64utf8(text), branch: conn.branch, ...(sha ? { sha } : {}) }, conn.token);
     }
+    // Keep the user's private sender up to date with the template (new features reach existing users automatically).
+    const SYNC_FILES = [".github/workflows/send.yml", "send_workouts.py", "requirements.txt", "README.md", "sender_version.txt"];  // version file last
+    async function ensureUpToDate(conn) {
+      const ver = async (repo, t) => { try { return parseInt(fromB64((await gh("GET", `/repos/${repo}/contents/sender_version.txt`, null, t)).data.content), 10) || 0; } catch (e) { if (e.status === 404) return 0; throw e; } };
+      const latest = await ver(TEMPLATE, conn.token), mine = await ver(`${conn.owner}/${conn.repo}`, conn.token);
+      if (!latest || mine >= latest) return false;
+      for (const f of SYNC_FILES) {
+        const src = (await gh("GET", `/repos/${TEMPLATE}/contents/${f}`, null, conn.token)).data;
+        await putFile(conn, f, fromB64(src.content), `Update MatRob Garmin Sender to version ${latest}`);
+      }
+      return true;
+    }
     // After moving to a private sender: remove the Garmin login and run data that ended up in the public template.
     async function cleanTemplate(old) {
       const R = `/repos/${old.owner}/${old.repo}`, t = old.token, quiet = p => p.catch(() => {});
@@ -7815,6 +7827,7 @@
       $("gsCleanBack").onclick = renderSend;
     }
     async function clean(mode, code, job) {
+      if (!job) await ensureUpToDate(CONN).catch(() => false);
       job = job || "clean-" + Date.now();
       const list = [[mode === "clean_all" ? "Delete every workout in your Garmin library" : "Delete workouts sent from MatRob", "run"]];
       const show = (extra = "") => body(steps(list) + extra);
@@ -7839,6 +7852,7 @@
       show();
       try {
         if (!job) {
+          if (await ensureUpToDate(CONN).catch(() => false)) { list[0][0] = "Upload to your GitHub (sender updated)"; show(); }
           job = "job-" + Date.now();
           const payload = { plan: PENDING.label, replace, created: new Date().toISOString(), workouts: PENDING.workouts };
           await gh("PUT", `/repos/${CONN.owner}/${CONN.repo}/contents/inbox/${job}.json`, { message: `Send ${PENDING.workouts.length} workouts`, content: b64utf8(JSON.stringify(payload)), branch: CONN.branch });
@@ -7862,7 +7876,7 @@
         list[1][1] = "done";
         show(box(OK, `<b>Done!</b> ${esc(res.message)}`) +
           (res.errors && res.errors.length ? box(WARN, res.errors.map(esc).join("<br>")) : "") +
-          `<p class="text-sm mt-3">Open the <b>Garmin Connect</b> app and sync your watch. ${PENDING.single ? "The workout is under Training → Workouts." : "Your workouts appear in the Garmin calendar and on your watch on their days."}</p>
+          `<p class="text-sm mt-3">Open the <b>Garmin Connect</b> app and sync your watch. ${PENDING.single ? "The workout is under Training → Workouts." : (res.pushed ? "The next 7 days' workouts are already on their way to your watch. Every morning, the next 7 days are sent automatically, so your watch stays topped up." : "Your workouts appear in the Garmin calendar and on your watch on their days.")}</p>
            <button type="button" id="gsDone" class="${BTN}">Done</button>`);
         $("gsDone").onclick = close;
       } catch (e) {
