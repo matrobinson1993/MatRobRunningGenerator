@@ -7201,7 +7201,7 @@
 
     // ========== APP VERSION + UPDATE NOTICE ==========
     // Bump this when you ship a new build (also bump CACHE_VERSION in sw.js).
-    const APP_VERSION = "1.8";
+    const APP_VERSION = "1.9";
 
     (function initAppVersion() {
       const badge = document.getElementById("appVersionBadge");
@@ -7547,7 +7547,7 @@
   <script>
   (() => {
     const TEMPLATE = "matrobinson1993/matrob-garmin-sender";   // the public template every user's private copy is made from
-    const REPO_NAME = "matrob-garmin-sender";
+    const REPO_NAME = "my-garmin-sender";                      // each user's own PRIVATE copy (must differ from the template's name)
     const API = "https://api.github.com";
     const LS_KEY = "matrob-garmin-sender";
     const $ = id => document.getElementById(id);
@@ -7559,6 +7559,11 @@
       del() { try { localStorage.removeItem(LS_KEY); } catch (e) {} }
     };
     let CONN = store.get();        // { token, owner, repo, branch, name }
+    // Early versions could end up using the shared public template itself as the sender (same name, same account).
+    // Move that connection to a private repo the next time the user connects.
+    const isTemplate = c => c && `${c.owner}/${c.repo}`.toLowerCase() === TEMPLATE.toLowerCase();
+    let MIGRATE = null;
+    if (isTemplate(CONN)) { MIGRATE = CONN; CONN = null; }
     let PENDING = null;            // { label, workouts, single, simp }
 
     // ---------- styles (Tailwind classes used by the rest of the app) ----------
@@ -7589,6 +7594,22 @@
         await sleep(ms);
       }
       throw new Error("GitHub is taking longer than usual. Please try again in a minute.");
+    }
+    const fromB64 = s => decodeURIComponent(escape(atob(String(s).replace(/\n/g, ""))));
+    async function putFile(conn, path, text, message) {
+      let sha; try { sha = (await gh("GET", `/repos/${conn.owner}/${conn.repo}/contents/${path}?ref=${conn.branch}`, null, conn.token)).data.sha; } catch (e) { if (e.status !== 404) throw e; }
+      await gh("PUT", `/repos/${conn.owner}/${conn.repo}/contents/${path}`, { message, content: b64utf8(text), branch: conn.branch, ...(sha ? { sha } : {}) }, conn.token);
+    }
+    // After moving to a private sender: remove the Garmin login and run data that ended up in the public template.
+    async function cleanTemplate(old) {
+      const R = `/repos/${old.owner}/${old.repo}`, t = old.token, quiet = p => p.catch(() => {});
+      for (const s of ["GARMIN_EMAIL", "GARMIN_PASSWORD"]) await quiet(gh("DELETE", `${R}/actions/secrets/${s}`, null, t));
+      try { const c = (await gh("GET", `${R}/actions/caches?per_page=100`, null, t)).data.actions_caches || []; for (const x of c) await quiet(gh("DELETE", `${R}/actions/caches/${x.id}`, null, t)); } catch (e) {}
+      for (const dir of ["results", "inbox"]) {
+        try { const files = (await gh("GET", `${R}/contents/${dir}`, null, t)).data || [];
+          for (const f of files) if (f.name !== ".gitkeep") await quiet(gh("DELETE", `${R}/contents/${f.path}`, { message: "Remove personal run data from the template", sha: f.sha }, t)); } catch (e) {}
+      }
+      try { const f = (await gh("GET", `${R}/contents/state/sent.json`, null, t)).data; await quiet(gh("DELETE", `${R}/contents/state/sent.json`, { message: "Remove personal run data from the template", sha: f.sha }, t)); } catch (e) {}
     }
     const b64utf8 = s => { const u = new TextEncoder().encode(s); let b = ""; for (let i = 0; i < u.length; i += 0x8000) b += String.fromCharCode.apply(null, u.subarray(i, i + 0x8000)); return btoa(b); };
 
@@ -7666,7 +7687,7 @@
 
     // ----- first-time setup -----
     function renderSetup(errHtml) {
-      body(`
+      body((MIGRATE ? box(WARN, "<b>One-time update:</b> Garmin sending is moving to your own <b>private</b> GitHub repository. Please connect once more by re-entering your Garmin email and password. Your GitHub key is already filled in.") : "") + `
         <p class="text-sm text-slate-600 dark:text-slate-300">Connect once and your workouts go straight to your Garmin calendar from now on. Your Garmin login is stored privately in <b>your own</b> free GitHub account, which does the sending for you. Nobody else sees it.</p>
         <h3 class="font-semibold mt-4">1 · GitHub</h3>
         <p class="${HINT}">No account? <a class="text-brand-600 underline" href="https://github.com/signup" target="_blank" rel="noopener">Create a free one</a>, then come back.</p>
@@ -7685,6 +7706,7 @@
         <details class="mt-4 text-xs text-slate-500 dark:text-slate-400"><summary class="cursor-pointer font-semibold">How does this work?</summary>
           <p class="mt-2">This creates a private repository called <b>${REPO_NAME}</b> in your GitHub account. When you tap Send, the app puts your workouts there, and GitHub runs a small program that logs in to Garmin Connect, adds the workouts and schedules them on their dates. Your GitHub key is kept on this phone so it can start those runs; you can revoke it any time at github.com/settings/tokens. This uses Garmin's unofficial access and isn't endorsed by Garmin.</p></details>`);
       $("gsConnect").onclick = connect;
+      if (MIGRATE && !$("gsToken").value) $("gsToken").value = MIGRATE.token;
     }
 
     async function connect() {
@@ -7703,9 +7725,17 @@
         step("done", `Connected to GitHub as ${me.data.login}`); i++; step("run");
         let repo = null;
         try { repo = (await gh("GET", `/repos/${conn.owner}/${conn.repo}`, null, token)).data; } catch (e) { if (e.status !== 404) throw e; }
+        if (repo && (!repo.private || repo.is_template))
+          throw new Error(`Your GitHub account already has a public repository called "${REPO_NAME}". Rename or delete it on GitHub, then try again.`);
+        const fresh = !repo;
         if (!repo) repo = (await gh("POST", `/repos/${TEMPLATE}/generate`, { owner: conn.owner, name: conn.repo, private: true, description: "Sends MatRob Running Generator workouts to my Garmin" }, token)).data;
         conn.branch = repo.default_branch || "main";
         await waitFor(async () => (await gh("GET", `/repos/${conn.owner}/${conn.repo}/actions/workflows/send.yml`, null, token)).data.id);
+        if (fresh || MIGRATE) {   // start the sent-workouts list clean, or carry it over from the old connection
+          let sent = "[]";
+          if (MIGRATE) { try { sent = fromB64((await gh("GET", `/repos/${MIGRATE.owner}/${MIGRATE.repo}/contents/state/sent.json`, null, MIGRATE.token)).data.content); } catch (e) {} }
+          await waitFor(async () => { await putFile(conn, "state/sent.json", sent, "Start tracking sent workouts"); return true; }, 5, 2000);
+        }
         step("done"); i++; step("run");
         await loadNacl();
         const key = (await gh("GET", `/repos/${conn.owner}/${conn.repo}/actions/secrets/public-key`, null, token)).data;
@@ -7735,6 +7765,7 @@
         $("gsBack").onclick = () => renderSetup(); return;
       }
       conn.name = res.name || null; CONN = conn; store.set(conn);
+      if (MIGRATE) { const old = MIGRATE; MIGRATE = null; cleanTemplate(old); }
       list[i][1] = "done"; list[i][0] = "Logged in to Garmin" + (res.name ? " as " + res.name : "");
       show(box(OK, "<b>Connected!</b> From now on, Send to Garmin takes one tap.") + (PENDING ? `<button type="button" id="gsNext" class="${BTN}">Continue to send</button>` : `<button type="button" id="gsDone" class="${BTN}">Done</button>`));
       if (PENDING) $("gsNext").onclick = renderSend; else $("gsDone").onclick = close;
